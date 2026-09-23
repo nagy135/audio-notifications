@@ -119,3 +119,9 @@ Five server integration tests, TypeScript, ESLint, 20 Expo Doctor checks, releas
 ### Voice picker update (2026-09-23)
 
 The updated signed release passed TypeScript, ESLint, native compilation and APK signature verification. An Android 16 ARM64 emulator with eSpeak detected 133 available voices. Manual checks covered the missing-engine error, search, selection, persistence after force-stop/relaunch, changing voices while listening, preview completion, and a missing saved voice falling back to automatic speech. These speech checks used local previews without pairing the emulator to the notification server. APK SHA-256: `4d1deb3e166cb247c60ff9e1d77c6b6bc75ad2a9b1ebb082bc2406844b5edce8`.
+
+### Kokoro release 1.1.0 (2026-09-23)
+
+The signed APK passed TypeScript, ESLint, native compilation, signature verification, and installation over the previous version with its pairing and selected voice retained. Twelve server tests and four worker tests passed. An Android 16 ARM64 emulator confirmed Kokoro previews, actual notification playback and spoken receipts, screen-off delivery, Kokoro playback with the Android engine disabled, and automatic Android fallback after a speech request failed. The deployed HTTPS/WSS protocol smoke test also passed.
+
+On nixpi, the float32 model generated a 5.8-second speech sample in 8.6 seconds using two CPU cores, compared with 13.8 seconds for the int8 model. The deployed worker uses float32. APK SHA-256: `0f7d2b3894a7cfaf19625e2cbd4d8160fe756bcb21cf72d1534eff6cceb8f284`.
