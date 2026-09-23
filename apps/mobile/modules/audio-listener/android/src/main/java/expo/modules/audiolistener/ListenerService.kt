@@ -6,29 +6,48 @@ import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.MediaPlayer
 import android.os.*
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import okhttp3.*
 import org.json.JSONObject
-import java.util.Locale
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.File
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 class ListenerService : Service() {
   companion object {
     @Volatile var running = false
     @Volatile var state = "Stopped"
+    @Volatile var speechEngine = ""
+    @Volatile var speechBusy = false
     private const val CHANNEL = "audio-listener"
     private const val NOTICE = 7001
   }
   private val handler = Handler(Looper.getMainLooper())
   private val client = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).connectTimeout(15, TimeUnit.SECONDS).readTimeout(0, TimeUnit.MILLISECONDS).build()
+  private val speechClient = OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS).callTimeout(18, TimeUnit.SECONDS).followRedirects(false).build()
   private var socket: WebSocket? = null
   private var tts: TextToSpeech? = null
   private var ready = false
+  private var ttsReady = false
+  private var ttsInitialized = false
+  private val ttsInitDeadline = SystemClock.elapsedRealtime() + 10000
+  private var download: Call? = null
+  private var audioFile: File? = null
+  private var player: MediaPlayer? = null
+  private var kokoroAttempted = false
+  private var speaking = false
+  private var utteranceId: String? = null
+  private var playbackLabel = ""
+  private var playbackDeadline = 0L
   private var destroyed = false
   private var retry = 1000L
   private var active: JSONObject? = null
+    set(value) { field = value; speechBusy = value != null }
   private var wakeLock: PowerManager.WakeLock? = null
   private var focus: AudioFocusRequest? = null
   private var legacyFocusListener: AudioManager.OnAudioFocusChangeListener? = null
@@ -53,32 +72,31 @@ class ListenerService : Service() {
     if (Build.VERSION.SDK_INT >= 34) startForeground(NOTICE, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE) else startForeground(NOTICE, notification)
     wakeLock = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AudioNotifications:Listener").apply { setReferenceCounted(false) }
     renewWake.run()
+    cacheDir.listFiles()?.filter { it.name.startsWith("kokoro-") && it.extension == "wav" }?.forEach { it.delete() }
+    // Delivery and Kokoro do not depend on an installed Android speech engine.
+    ready = true; connect()
     tts = TextToSpeech(this) { result -> handler.post {
       if (destroyed) return@post
-      if (result != TextToSpeech.SUCCESS) { update("Speech engine unavailable. Open voice settings."); return@post }
+      ttsInitialized = true
+      if (result != TextToSpeech.SUCCESS) { speak(); return@post }
       val engine = tts ?: return@post
-      val lang = engine.setLanguage(Locale.getDefault())
-      if (lang < TextToSpeech.LANG_AVAILABLE && engine.setLanguage(Locale.US) < TextToSpeech.LANG_AVAILABLE) {
-        update("Install a voice in Android speech settings."); return@post
-      }
-      // Prefer an installed offline voice so speech works without cloud TTS.
-      engine.voices?.firstOrNull { it.locale.language == engine.language?.language && !it.isNetworkConnectionRequired && !it.features.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) }?.let { engine.voice = it }
+      speechEngine = engine.defaultEngine.orEmpty()
       engine.setAudioAttributes(attributes)
       engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-        override fun onStart(id: String?) { handler.post { if (active?.optString("id") == id) update("Speaking") } }
-        override fun onDone(id: String?) { handler.post { if (active?.optString("id") == id) finish("spoken") } }
-        @Deprecated("Android legacy callback") override fun onError(id: String?) { handler.post { if (active?.optString("id") == id) finish("failed", "Speech engine error") } }
-        override fun onError(id: String?, code: Int) { handler.post { if (active?.optString("id") == id) finish("failed", "Speech engine error $code") } }
+        override fun onStart(id: String?) {}
+        override fun onDone(id: String?) { handler.post { if (id != null && utteranceId == id) finish("spoken") } }
+        @Deprecated("Android legacy callback") override fun onError(id: String?) { handler.post { if (id != null && utteranceId == id) finish("failed", "Speech engine error") } }
+        override fun onError(id: String?, code: Int) { handler.post { if (id != null && utteranceId == id) finish("failed", "Speech engine error $code") } }
       })
-      ready = true; connect(); speak()
+      ttsReady = true; speak()
     } }
   }
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (intent?.action == "STOP" || !Store.prefs(this).getBoolean("enabled", false)) {
       Store.prefs(this).edit().putBoolean("enabled", false).commit(); stopSelf(); return START_NOT_STICKY
     }
-    if (intent?.action == "TEST" && active == null) {
-      active = JSONObject().put("id", "test-${System.currentTimeMillis()}").put("text", "Audio notifications are ready. You can lock your phone and I will keep listening.").put("expiresAt", System.currentTimeMillis() + 60000).put("local", true)
+    if ((intent?.action == "TEST" || intent?.action == "TEST_FALLBACK") && active == null) {
+      active = JSONObject().put("id", "test-${System.currentTimeMillis()}").put("text", "Audio notifications are ready. You can lock your phone and I will keep listening.").put("expiresAt", System.currentTimeMillis() + 60000).put("local", true).put("androidOnly", intent.action == "TEST_FALLBACK")
       speak()
     }
     return START_STICKY
@@ -106,7 +124,7 @@ class ListenerService : Service() {
       update("Connecting…")
       val request = Request.Builder().url(url).header("Authorization", "Bearer ${Store.token(this)}").build()
       socket = client.newWebSocket(request, object : WebSocketListener() {
-        override fun onOpen(ws: WebSocket, response: Response) { handler.post { if (socket === ws && !destroyed) { retry = 1000L; update(if (active == null) "Listening" else "Speaking") } } }
+        override fun onOpen(ws: WebSocket, response: Response) { handler.post { if (socket === ws && !destroyed) { retry = 1000L; if (active == null) update("Listening") } } }
         override fun onMessage(ws: WebSocket, text: String) { handler.post {
           if (socket !== ws || destroyed) return@post
           try {
@@ -137,18 +155,34 @@ class ListenerService : Service() {
     } catch (_: Exception) { scheduleReconnect() }
   }
   private fun scheduleReconnect() {
-    update("Reconnecting — check Tailscale")
+    if (active == null) update("Reconnecting — check Tailscale")
     handler.removeCallbacks(reconnect); handler.postDelayed(reconnect, retry + (0..500).random())
     retry = (retry * 2).coerceAtMost(30000L)
   }
   private fun speak() {
     val m = active ?: return
-    if (!ready || destroyed) return
+    if (!ready || destroyed || speaking || download != null) return
+    handler.removeCallbacks(speakLater)
     if (m.optLong("expiresAt") <= System.currentTimeMillis()) { finish("expired"); return }
     if (audio.getStreamVolume(AudioManager.STREAM_MUSIC) == 0) { update("Media volume is muted — waiting"); handler.postDelayed(speakLater, 2000); return }
+    if (!kokoroAttempted && !m.optBoolean("androidOnly") && Store.prefs(this).getBoolean("useKokoro", true)) {
+      kokoroAttempted = true
+      fetchKokoro(m)
+      return
+    }
+    if (audioFile == null && !ttsInitialized) {
+      if (SystemClock.elapsedRealtime() >= ttsInitDeadline) { finish("failed", "Android fallback engine did not initialize"); return }
+      update("Preparing Android voice…")
+      if (playbackDeadline == 0L) armWatchdog()
+      handler.postDelayed(speakLater, 500)
+      return
+    }
+    if (audioFile == null && (!ttsReady || tts?.let { SpeechVoices.apply(it, speechEngine, Store.prefs(this)) } != true)) {
+      finish("failed", "No Android fallback voice available. Open voice settings."); return
+    }
     val listener = AudioManager.OnAudioFocusChangeListener { change -> handler.post {
       if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
-        tts?.stop(); handler.removeCallbacks(watchdog); abandonFocus(); handler.removeCallbacks(speakLater); handler.postDelayed(speakLater, 2000)
+        stopPlayback(); abandonFocus(); handler.removeCallbacks(speakLater); handler.postDelayed(speakLater, 2000)
       }
     } }
     val granted = if (Build.VERSION.SDK_INT >= 26) {
@@ -160,9 +194,108 @@ class ListenerService : Service() {
       audio.requestAudioFocus(listener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
     }
     if (granted != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { update("Waiting for audio"); abandonFocus(); handler.postDelayed(speakLater, 2000); return }
-    update("Speaking")
-    handler.postDelayed(watchdog, 150000)
-    if (tts?.speak(m.getString("text"), TextToSpeech.QUEUE_FLUSH, Bundle(), m.getString("id")) != TextToSpeech.SUCCESS) finish("failed", "Could not start speech")
+    speaking = true
+    armWatchdog()
+    val file = audioFile
+    if (file != null) {
+      playbackLabel = "Kokoro · ${m.optString("kokoroVoice", "af_heart")}"
+      update("Speaking · Kokoro")
+      try {
+        val media = MediaPlayer()
+        player = media
+        media.setAudioAttributes(attributes)
+        media.setOnCompletionListener { if (player === it && active === m) finish("spoken") }
+        media.setOnErrorListener { failed, _, _ ->
+          if (player === failed && active === m) fallbackFromPlayback()
+          true
+        }
+        media.setOnPreparedListener {
+          if (player === it && active === m && !destroyed) {
+            if (m.optLong("expiresAt") <= System.currentTimeMillis()) finish("expired")
+            else try { it.start() } catch (_: Exception) { fallbackFromPlayback() }
+          }
+        }
+        media.setDataSource(file.absolutePath)
+        media.prepareAsync()
+      } catch (_: Exception) { fallbackFromPlayback() }
+    } else {
+      playbackLabel = if (kokoroAttempted) "Android fallback" else "Android"
+      update("Speaking · $playbackLabel")
+      utteranceId = "${m.getString("id")}-${System.nanoTime()}"
+      if (tts?.speak(m.getString("text"), TextToSpeech.QUEUE_FLUSH, Bundle(), utteranceId) != TextToSpeech.SUCCESS) finish("failed", "Could not start Android speech")
+    }
+  }
+
+  private fun armWatchdog() {
+    if (playbackDeadline == 0L) playbackDeadline = SystemClock.elapsedRealtime() + 150000
+    handler.removeCallbacks(watchdog)
+    handler.postDelayed(watchdog, (playbackDeadline - SystemClock.elapsedRealtime()).coerceAtLeast(1))
+  }
+
+  private fun fetchKokoro(m: JSONObject) {
+    update("Preparing Kokoro voice…")
+    try {
+      val prefs = Store.prefs(this)
+      val voice = prefs.getString("kokoroVoice", "af_heart")!!
+      m.put("kokoroVoice", voice)
+      val payload = JSONObject().put("voice", voice)
+      if (m.optBoolean("local")) payload.put("preview", true) else payload.put("messageId", m.getString("id"))
+      val remaining = m.optLong("expiresAt") - System.currentTimeMillis()
+      val request = Request.Builder().url(prefs.getString("url", "")!! + "/v1/speech")
+        .header("Authorization", "Bearer ${Store.token(this)}")
+        .post(payload.toString().toRequestBody("application/json".toMediaType())).build()
+      val call = speechClient.newCall(request)
+      call.timeout().timeout(remaining.coerceIn(1, 18000), TimeUnit.MILLISECONDS)
+      download = call
+      call.enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) { handler.post {
+          if (download === call && active === m && !destroyed) { download = null; speak() }
+        } }
+        override fun onResponse(call: Call, response: Response) {
+          var file: File? = null
+          try {
+            response.use {
+              check(it.isSuccessful && it.header("Content-Type")?.startsWith("audio/wav") == true)
+              val body = requireNotNull(it.body)
+              check(body.contentLength() <= 8 * 1024 * 1024)
+              val target = File.createTempFile("kokoro-", ".wav", cacheDir)
+              file = target
+              target.outputStream().use { output -> body.byteStream().use { input ->
+                val buffer = ByteArray(8192)
+                var total = 0
+                while (true) {
+                  val count = input.read(buffer)
+                  if (count < 0) break
+                  total += count
+                  check(total <= 8 * 1024 * 1024)
+                  output.write(buffer, 0, count)
+                }
+                check(total >= 44)
+              } }
+            }
+          } catch (_: Exception) { file?.delete(); file = null }
+          val completed = file
+          handler.post {
+            if (download !== call || active !== m || destroyed) { completed?.delete(); return@post }
+            download = null; audioFile = completed; speak()
+          }
+        }
+      })
+    } catch (_: Exception) { download = null; speak() }
+  }
+
+  private fun stopPlayback() {
+    utteranceId = null
+    tts?.stop()
+    val media = player; player = null
+    media?.release()
+    speaking = false
+  }
+
+  private fun fallbackFromPlayback() {
+    stopPlayback(); abandonFocus()
+    audioFile?.delete(); audioFile = null
+    speak()
   }
   private fun abandonFocus() {
     if (Build.VERSION.SDK_INT >= 26) focus?.let { audio.abandonAudioFocusRequest(it) }
@@ -174,9 +307,12 @@ class ListenerService : Service() {
   private fun finish(status: String, error: String? = null) {
     val m = active ?: return
     handler.removeCallbacks(watchdog); handler.removeCallbacks(speakLater)
-    active = null; if (status != "spoken") tts?.stop(); abandonFocus()
+    active = null; stopPlayback(); abandonFocus()
+    download?.cancel(); download = null
+    audioFile?.delete(); audioFile = null
+    kokoroAttempted = false; playbackDeadline = 0
     val p = Store.prefs(this)
-    if (status == "spoken") p.edit().putString("lastText", m.optString("text")).putLong("lastAt", System.currentTimeMillis()).commit()
+    if (status == "spoken") p.edit().putString("lastText", m.optString("text")).putString("lastVoice", playbackLabel).putLong("lastAt", System.currentTimeMillis()).commit()
     if (!m.optBoolean("local")) {
       val ack = JSONObject().put("type", "ack").put("id", m.getString("id")).put("status", status)
       if (error != null) ack.put("error", error)
@@ -189,11 +325,15 @@ class ListenerService : Service() {
     update(if (status == "failed") "Speech failed — open voice settings" else if (socket == null) "Reconnecting — check Tailscale" else "Listening")
   }
   override fun onDestroy() {
-    destroyed = true; running = false; state = "Stopped"
+    destroyed = true; running = false; state = "Stopped"; speechEngine = ""
+    active = null
     handler.removeCallbacksAndMessages(null)
-    socket?.cancel(); socket = null; tts?.stop(); tts?.shutdown(); abandonFocus()
+    download?.cancel(); download = null
+    stopPlayback(); audioFile?.delete(); audioFile = null
+    socket?.cancel(); socket = null; tts?.shutdown(); abandonFocus()
     if (wakeLock?.isHeld == true) wakeLock?.release()
     client.dispatcher.executorService.shutdown(); client.connectionPool.evictAll()
+    speechClient.dispatcher.executorService.shutdown(); speechClient.connectionPool.evictAll()
     stopForeground(STOP_FOREGROUND_REMOVE); super.onDestroy()
   }
 }

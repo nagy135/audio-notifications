@@ -7,6 +7,7 @@ services:
     init: true
     environment:
       API_TOKEN: ${API_TOKEN:?Set API_TOKEN in .env}
+      KOKORO_URL: http://kokoro:8880
     ports:
       - "127.0.0.1:8787:8787"
     volumes:
@@ -21,6 +22,34 @@ services:
       test: [CMD, node, -e, "fetch('http://127.0.0.1:8787/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+  kokoro:
+    build:
+      context: .
+      dockerfile: apps/kokoro/Dockerfile
+    restart: unless-stopped
+    init: true
+    environment:
+      KOKORO_THREADS: "2"
+    mem_limit: 1200m
+    cpus: 2.0
+    read_only: true
+    tmpfs:
+      # phonemizer loads a private copy of the eSpeak shared library from /tmp.
+      - /tmp:size=64m,exec
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8880/health', timeout=2)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
       retries: 3
     logging:
       driver: json-file

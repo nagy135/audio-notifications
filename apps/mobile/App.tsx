@@ -3,6 +3,8 @@ import { Alert, AppState, PermissionsAndroid, Platform, Pressable, ScrollView, S
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import Listener from './modules/audio-listener/src/AudioListenerModule';
+import VoicePicker from './VoicePicker';
+import KokoroPicker from './KokoroPicker';
 
 export default function App() {
   const [status, setStatus] = useState(() => Listener.status());
@@ -31,7 +33,7 @@ export default function App() {
     }
     Listener.start();
   }
-  const connected = status.state === 'Listening' || status.state === 'Speaking';
+  const connected = status.state === 'Listening' || status.state.startsWith('Speaking') || status.state.startsWith('Preparing');
   return <SafeAreaProvider><SafeAreaView style={s.page}>
     <StatusBar style="light" />
     <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
@@ -66,6 +68,8 @@ export default function App() {
         <Text style={s.last}>{status.lastText || 'All quiet for now.'}</Text>
         <Text style={s.hint}>{status.lastAt ? new Date(status.lastAt).toLocaleString() : 'Your next message will appear here.'}</Text>
       </View>}
+      <KokoroPicker status={status} refresh={refresh} />
+      <VoicePicker status={status} />
       <View style={s.footer}>
         <Pressable accessibilityRole="button" onPress={() => run(() => Listener.speechSettings())}><Text style={s.footerLink}>Voice settings</Text></Pressable>
         {status.paired && !editing && <Pressable accessibilityRole="button" onPress={() => setEditing(true)}><Text style={s.footerLink}>Change pairing</Text></Pressable>}

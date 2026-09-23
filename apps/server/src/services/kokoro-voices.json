@@ -1,0 +1,12 @@
+[
+  { "id": "af_heart", "name": "Heart", "language": "en-US", "description": "American English · female" },
+  { "id": "af_bella", "name": "Bella", "language": "en-US", "description": "American English · female" },
+  { "id": "af_nicole", "name": "Nicole", "language": "en-US", "description": "American English · female" },
+  { "id": "af_sarah", "name": "Sarah", "language": "en-US", "description": "American English · female" },
+  { "id": "am_michael", "name": "Michael", "language": "en-US", "description": "American English · male" },
+  { "id": "am_fenrir", "name": "Fenrir", "language": "en-US", "description": "American English · male" },
+  { "id": "bf_emma", "name": "Emma", "language": "en-GB", "description": "British English · female" },
+  { "id": "bf_isabella", "name": "Isabella", "language": "en-GB", "description": "British English · female" },
+  { "id": "bm_george", "name": "George", "language": "en-GB", "description": "British English · male" },
+  { "id": "bm_fable", "name": "Fable", "language": "en-GB", "description": "British English · male" }
+]

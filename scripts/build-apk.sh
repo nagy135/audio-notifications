@@ -23,6 +23,8 @@ fi
 (cd apps/mobile && CI=1 npx expo prebuild --platform android --no-install)
 (cd apps/mobile/android && ./gradlew assembleRelease -PreactNativeArchitectures="${AUDIO_ABIS:-arm64-v8a,armeabi-v7a}" --console=plain)
 mkdir -p artifacts
-cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk artifacts/audio-notifications-1.0.0.apk
-"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs artifacts/audio-notifications-1.0.0.apk
-shasum -a 256 artifacts/audio-notifications-1.0.0.apk
+apk_version=$(node -p "require('./apps/mobile/app.json').expo.version")
+apk_path="artifacts/audio-notifications-$apk_version.apk"
+cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk "$apk_path"
+"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk_path"
+shasum -a 256 "$apk_path"

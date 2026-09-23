@@ -4,8 +4,10 @@ import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import http from 'node:http';
 import { WebSocket } from 'ws';
 import { createServer } from '../src/server.js';
+import { PREVIEW_TEXT } from '../src/services/speech.js';
 const token = 'test-token-with-at-least-32-characters';
 async function setup(t, opts = {}) {
   const app = createServer({ token, ...opts });
@@ -293,4 +295,244 @@ test('WebSocket authentication and malformed acknowledgements preserve queued de
   const reconnected = listen(device);
   await reconnected.next();
   assert.equal((await reconnected.next()).id, sent.body.id);
+});
+
+// A minimal PCM WAV keeps transport tests independent of model downloads.
+function testWav() {
+  const wav = Buffer.alloc(46);
+  wav.write('RIFF');
+  wav.writeUInt32LE(38, 4);
+  wav.write('WAVEfmt ', 8);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(24000, 24);
+  wav.writeUInt32LE(48000, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write('data', 36);
+  wav.writeUInt32LE(2, 40);
+  return wav;
+}
+
+async function speechWorker(t, respond) {
+  const worker = http.createServer(async (req, res) => {
+    if (req.url === '/health') {
+      res.end('{}');
+      return;
+    }
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    await respond(JSON.parse(body), res);
+  });
+  worker.listen(0, '127.0.0.1');
+  await once(worker, 'listening');
+  t.after(
+    () =>
+      new Promise((resolve) => {
+        worker.close(resolve);
+        worker.closeAllConnections();
+      }),
+  );
+  return `http://127.0.0.1:${worker.address().port}`;
+}
+
+function speechRequest(base, device, payload) {
+  return fetch(base + '/v1/speech', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${device.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+test('Kokoro audio is device scoped, previews use fixed text, and voice choices are validated', async (t) => {
+  const calls = [];
+  const kokoroUrl = await speechWorker(t, (body, res) => {
+    calls.push(body);
+    res.writeHead(200, { 'Content-Type': 'audio/wav' });
+    res.end(testWav());
+  });
+  const { api, pair, base } = await setup(t, { kokoroUrl });
+  const a = await pair(),
+    b = await pair();
+  assert.equal((await api('/v1/voices')).status, 401);
+  const catalog = await api('/v1/voices', undefined, {
+    Authorization: `Bearer ${a.token}`,
+  });
+  assert.equal(catalog.body.available, true);
+  assert.equal(catalog.body.voices.length, 10);
+  const sent = await api('/v1/messages', {
+    text: 'Only phone A can get this audio.',
+    deviceId: a.deviceId,
+  });
+  assert.equal(
+    (await speechRequest(base, b, { messageId: sent.body.id })).status,
+    404,
+  );
+  assert.equal(
+    (await speechRequest(base, { token }, { messageId: sent.body.id })).status,
+    401,
+  );
+  assert.equal(
+    (
+      await speechRequest(base, a, {
+        messageId: sent.body.id,
+        voice: '../../bad',
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (await speechRequest(base, a, { text: 'arbitrary text' })).status,
+    400,
+  );
+  const audio = await speechRequest(base, a, {
+    messageId: sent.body.id,
+    voice: 'bf_emma',
+  });
+  assert.equal(audio.status, 200);
+  assert.equal(audio.headers.get('cache-control'), 'no-store');
+  assert.equal(audio.headers.get('content-type'), 'audio/wav');
+  assert.deepEqual(Buffer.from(await audio.arrayBuffer()), testWav());
+  assert.deepEqual(calls[0], {
+    text: 'Only phone A can get this audio.',
+    voice: 'bf_emma',
+  });
+  const preview = await speechRequest(base, a, {
+    preview: true,
+    text: 'Do not synthesize this',
+  });
+  assert.equal(preview.status, 200);
+  await preview.arrayBuffer();
+  assert.equal(calls[1].text, PREVIEW_TEXT);
+  assert.equal(
+    (await api('/v1/messages/' + sent.body.id)).body.deliveries[0].status,
+    'queued',
+  );
+});
+
+test('Kokoro cache shares concurrent synthesis and re-checks expiry and revocation', async (t) => {
+  let release,
+    calls = 0,
+    clock = Date.now();
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const kokoroUrl = await speechWorker(t, async (_body, res) => {
+    calls++;
+    await gate;
+    res.writeHead(200, { 'Content-Type': 'audio/wav' });
+    res.end(testWav());
+  });
+  const { api, pair, base } = await setup(t, { kokoroUrl, now: () => clock });
+  const device = await pair();
+  const sent = await api('/v1/messages', {
+    text: 'Shared generation',
+    ttlSeconds: 600,
+  });
+  const payload = { messageId: sent.body.id };
+  const first = speechRequest(base, device, payload),
+    second = speechRequest(base, device, payload);
+  // Wait for the worker without assuming machine timing.
+  for (let i = 0; !calls && i < 100; i++)
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(calls, 1);
+  const busy = await speechRequest(base, device, {
+    ...payload,
+    voice: 'af_bella',
+  });
+  assert.equal(busy.status, 503);
+  release();
+  for (const response of await Promise.all([first, second])) {
+    assert.equal(response.status, 200);
+    await response.arrayBuffer();
+  }
+  await (await speechRequest(base, device, payload)).arrayBuffer();
+  assert.equal(calls, 1);
+  clock += 120_001;
+  await (await speechRequest(base, device, payload)).arrayBuffer();
+  assert.equal(calls, 2);
+  clock += 600_000;
+  assert.equal((await speechRequest(base, device, payload)).status, 410);
+  await api('/v1/devices/' + device.deviceId, undefined, {}, 'DELETE');
+  assert.equal(
+    (await speechRequest(base, device, { preview: true })).status,
+    401,
+  );
+});
+
+test('unavailable, corrupt, oversized and stalled Kokoro responses fail promptly without blocking delivery', async (t) => {
+  let mode = 'unavailable';
+  const kokoroUrl = await speechWorker(t, (_body, res) => {
+    if (mode === 'unavailable') {
+      res.writeHead(503);
+      res.end();
+    } else if (mode === 'corrupt') {
+      res.writeHead(200, { 'Content-Type': 'audio/wav' });
+      res.end('bad wav');
+    } else if (mode === 'oversized') {
+      res.writeHead(200, { 'Content-Type': 'audio/wav' });
+      res.end(Buffer.alloc(8 * 1024 * 1024 + 1));
+    } else {
+      res.writeHead(200, { 'Content-Type': 'audio/wav' });
+      res.flushHeaders();
+    }
+  });
+  const { api, pair, listen, base } = await setup(t, {
+    kokoroUrl,
+    speechTimeoutMs: 200,
+  });
+  const device = await pair();
+  const client = listen(device);
+  await client.next();
+  const sent = await api('/v1/messages', {
+    text: 'Still delivered when Kokoro is broken.',
+  });
+  assert.equal((await client.next()).id, sent.body.id);
+  for (const [scenario, status] of [
+    ['unavailable', 503],
+    ['corrupt', 502],
+    ['oversized', 502],
+    ['stalled', 503],
+  ]) {
+    mode = scenario;
+    const response = await speechRequest(base, device, {
+      messageId: sent.body.id,
+    });
+    assert.equal(response.status, status, scenario);
+    await response.json();
+  }
+  client.ws.send(
+    JSON.stringify({ type: 'ack', id: sent.body.id, status: 'spoken' }),
+  );
+  const next = await api('/v1/messages', {
+    text: 'Next notification after Android fallback.',
+  });
+  assert.equal((await client.next()).id, next.body.id);
+  assert.equal(
+    (await api('/v1/messages/' + sent.body.id)).body.deliveries[0].status,
+    'spoken',
+  );
+});
+
+test('Kokoro does not return audio if a message expires during generation', async (t) => {
+  let clock = Date.now();
+  const kokoroUrl = await speechWorker(t, (_body, res) => {
+    clock += 2000;
+    res.writeHead(200, { 'Content-Type': 'audio/wav' });
+    res.end(testWav());
+  });
+  const { api, pair, base } = await setup(t, { kokoroUrl, now: () => clock });
+  const device = await pair();
+  const sent = await api('/v1/messages', {
+    text: 'Expired while generating',
+    ttlSeconds: 1,
+  });
+  assert.equal(
+    (await speechRequest(base, device, { messageId: sent.body.id })).status,
+    410,
+  );
 });

@@ -6,6 +6,7 @@ export function createRequestHandler({
   rateLimiter,
   devices,
   messages,
+  speech,
 }) {
   return async (req, res) => {
     const reply = (status, value) => replyJson(res, status, value);
@@ -19,6 +20,23 @@ export function createRequestHandler({
       if (req.method === 'POST' && path === '/v1/pair') {
         rateLimiter.check(`pair:${req.socket.remoteAddress}`, 10);
         return reply(201, devices.pair(await readJson(req)));
+      }
+
+      if (req.method === 'GET' && path === '/v1/voices') {
+        speech.authorize(req);
+        return reply(200, await speech.catalogue());
+      }
+      if (req.method === 'POST' && path === '/v1/speech') {
+        const deviceId = speech.authorize(req);
+        rateLimiter.check(`speech:${deviceId}`, 30);
+        const audio = await speech.render(req, await readJson(req));
+        res.writeHead(200, {
+          'Content-Type': 'audio/wav',
+          'Content-Length': audio.length,
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+        });
+        return res.end(audio);
       }
 
       if (!authorized(req)) throw httpError(401, 'Unauthorized');

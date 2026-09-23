@@ -7,3 +7,9 @@ apps/*
 apps/server/*
 !apps/server/package.json
 !apps/server/src
+!apps/kokoro
+apps/kokoro/*
+!apps/kokoro/Dockerfile
+!apps/kokoro/requirements.txt
+!apps/kokoro/download_models.py
+!apps/kokoro/server.py
