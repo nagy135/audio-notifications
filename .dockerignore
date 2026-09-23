@@ -1,0 +1,9 @@
+*
+!package.json
+!package-lock.json
+!apps
+apps/*
+!apps/server
+apps/server/*
+!apps/server/package.json
+!apps/server/src

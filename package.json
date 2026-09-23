@@ -1,0 +1,12 @@
+{
+  "name": "audio-notifications", "private": true, "version": "1.0.0",
+  "workspaces": ["apps/*"],
+  "scripts": {
+    "test": "npm test --workspace @audio-notifications/server",
+    "typecheck": "npm run typecheck --workspace @audio-notifications/mobile",
+    "server": "npm start --workspace @audio-notifications/server",
+    "android": "npm run android --workspace @audio-notifications/mobile",
+    "build:apk": "bash scripts/build-apk.sh"
+  },
+  "engines": {"node": ">=22.13.0"}
+}

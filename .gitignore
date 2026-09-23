@@ -1,0 +1,13 @@
+node_modules/
+.expo/
+apps/mobile/android/
+apps/mobile/ios/
+*.jks
+*.keystore
+.env
+.env.*
+!.env.example
+artifacts/
+data/
+.DS_Store
+*.log
