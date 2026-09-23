@@ -70,3 +70,14 @@ test('queued messages survive a server restart', async t => {
   assert.equal(app.db.prepare('SELECT text FROM messages').get().text, 'persist me');
   assert.equal(app.db.prepare('SELECT status FROM deliveries').get().status, 'queued'); await app.close();
 });
+
+test('expiry does not invalidate a message already being spoken', async t => {
+  let clock = Date.now(); const { api, pair, listen } = await setup(t, { now: () => clock });
+  const device = await pair(), c = listen(device); await c.next();
+  const sent = await api('/v1/messages', { text: 'already speaking', ttlSeconds: 1 }); await c.next();
+  clock += 2000;
+  assert.equal((await api('/v1/messages/' + sent.body.id)).body.deliveries[0].status, 'queued');
+  c.ws.send(JSON.stringify({ type: 'ack', id: sent.body.id, status: 'spoken' }));
+  await new Promise(r => setTimeout(r, 30));
+  assert.equal((await api('/v1/messages/' + sent.body.id)).body.deliveries[0].status, 'spoken');
+});

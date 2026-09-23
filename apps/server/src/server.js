@@ -25,7 +25,10 @@ export function createServer({ database = ':memory:', token, now = Date.now } = 
     return timingSafeEqual(Buffer.from(given), Buffer.from(expected));
   }
   function expire() {
-    db.prepare("UPDATE deliveries SET status='expired',updated_at=? WHERE status='queued' AND message_id IN (SELECT id FROM messages WHERE expires_at<=?)").run(now(), now());
+    // A message already being spoken gets its bounded delivery window to finish.
+    const inFlight = [...clients.entries()].filter(([, ws]) => ws.inflight).map(([deviceId, ws]) => [deviceId, ws.inflight]);
+    const exclusions = inFlight.map(() => '(device_id=? AND message_id=?)').join(' OR ');
+    db.prepare("UPDATE deliveries SET status='expired',updated_at=? WHERE status='queued' AND message_id IN (SELECT id FROM messages WHERE expires_at<=?)" + (exclusions ? ` AND NOT (${exclusions})` : '')).run(now(), now(), ...inFlight.flat());
   }
   function pump(deviceId) {
     expire();
