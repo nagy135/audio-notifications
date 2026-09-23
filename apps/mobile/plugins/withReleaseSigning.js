@@ -1,6 +1,8 @@
 const { withAppBuildGradle } = require('expo/config-plugins');
 module.exports = config => withAppBuildGradle(config, config => {
+  config.modResults.contents = config.modResults.contents.replace(/\n\/\/ @generated begin audio-signing[\s\S]*?\/\/ @generated end audio-signing\n/g, "");
   config.modResults.contents += `
+// @generated begin audio-signing
 // Signing material lives outside the repository and APK.
 android {
   signingConfigs {
@@ -22,6 +24,7 @@ tasks.configureEach { task ->
     }
   }
 }
+// @generated end audio-signing
 `;
   return config;
 });

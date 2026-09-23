@@ -1,12 +1,32 @@
 {
   "expo": {
-    "name": "Audio Notifications", "slug": "audio-notifications", "version": "1.0.0",
-    "platforms": ["android"], "orientation": "portrait", "userInterfaceStyle": "dark",
+    "name": "Audio Notifications",
+    "slug": "audio-notifications",
+    "version": "1.0.0",
+    "platforms": [
+      "android"
+    ],
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
     "android": {
-      "package": "tech.infiniter.audionotifications", "versionCode": 1,
-      "allowBackup": false, "blockedPermissions": ["android.permission.RECORD_AUDIO", "android.permission.SYSTEM_ALERT_WINDOW", "android.permission.READ_EXTERNAL_STORAGE", "android.permission.WRITE_EXTERNAL_STORAGE"],
-      "predictiveBackGestureEnabled": true
+      "package": "tech.infiniter.audionotifications",
+      "versionCode": 1,
+      "allowBackup": false,
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ],
+      "predictiveBackGestureEnabled": true,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#101419"
+      }
     },
-    "plugins": ["./plugins/withReleaseSigning"]
+    "plugins": [
+      "./plugins/withReleaseSigning"
+    ],
+    "icon": "./assets/icon.png"
   }
 }

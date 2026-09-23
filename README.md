@@ -40,7 +40,7 @@ Custom native code lives in `apps/mobile/modules/audio-listener`; generated `and
 cp .env.example .env
 # Set API_TOKEN to a cryptographically random secret of at least 32 characters.
 docker compose up -d --build
-tailscale serve --bg --https=8444 http://127.0.0.1:8787
+sudo tailscale serve --bg --https=8444 http://127.0.0.1:8787
 ```
 
 Deployed checkout: `infiniter@nixpi.tail6650cb.ts.net:~/services/audio-notifications`. Docker binds localhost only; Tailscale Serve provides HTTPS/WSS privately on port 8444. It coexists with the existing service on 8443. SQLite lives in the `audio-data` Docker volume; preserve this volume on upgrades. The container restarts unless stopped and has a health check. Use `docker compose logs --tail=100 server` and `docker compose ps` for diagnostics. Back up SQLite using its online backup API or stop the container before copying the database and WAL files.

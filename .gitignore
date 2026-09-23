@@ -11,3 +11,7 @@ artifacts/
 data/
 .DS_Store
 *.log
+**/android/build/
+**/android/.gradle/
+**/android/.cxx/
+__pycache__/

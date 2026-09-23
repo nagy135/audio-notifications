@@ -11,7 +11,6 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import okhttp3.*
 import org.json.JSONObject
-import org.json.JSONArray
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -32,6 +31,7 @@ class ListenerService : Service() {
   private var active: JSONObject? = null
   private var wakeLock: PowerManager.WakeLock? = null
   private var focus: AudioFocusRequest? = null
+  private var legacyFocusListener: AudioManager.OnAudioFocusChangeListener? = null
   private val audio by lazy { getSystemService(AudioManager::class.java) }
   private val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
   private val reconnect = Runnable { connect() }
@@ -154,7 +154,11 @@ class ListenerService : Service() {
     val granted = if (Build.VERSION.SDK_INT >= 26) {
       focus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK).setAudioAttributes(attributes).setOnAudioFocusChangeListener(listener, handler).build()
       audio.requestAudioFocus(focus!!)
-    } else { @Suppress("DEPRECATION") audio.requestAudioFocus(listener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK) }
+    } else {
+      legacyFocusListener = listener
+      @Suppress("DEPRECATION")
+      audio.requestAudioFocus(listener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+    }
     if (granted != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { update("Waiting for audio"); abandonFocus(); handler.postDelayed(speakLater, 2000); return }
     update("Speaking")
     handler.postDelayed(watchdog, 150000)
@@ -163,6 +167,9 @@ class ListenerService : Service() {
   private fun abandonFocus() {
     if (Build.VERSION.SDK_INT >= 26) focus?.let { audio.abandonAudioFocusRequest(it) }
     focus = null
+    @Suppress("DEPRECATION")
+    legacyFocusListener?.let { audio.abandonAudioFocus(it) }
+    legacyFocusListener = null
   }
   private fun finish(status: String, error: String? = null) {
     val m = active ?: return
