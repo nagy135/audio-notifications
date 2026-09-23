@@ -25,6 +25,7 @@ Node 22.13+ (Node 24 LTS recommended), npm, JDK 17, Android SDK 36 and build-too
 ```sh
 npm ci
 npm test
+npm run format:check
 npm run typecheck
 npm exec --workspace @audio-notifications/mobile -- eslint .
 npm run build:apk
@@ -35,6 +36,15 @@ npm run build:apk
 Custom native code lives in `apps/mobile/modules/audio-listener`; generated `android/` and `ios/` are ignored. This app requires a native build, not Expo Go. Credentials are encrypted with Android Keystore; Android backup is disabled. The APK contains only the tailnet server URL, no server/phone tokens.
 
 ## Server and deployment
+
+The server uses `src/server.js` to wire together focused modules: `http/` handles
+JSON requests and routing, `services/` owns pairing and message operations,
+`realtime/` manages WebSocket delivery and acknowledgements, `storage/` owns the
+SQLite schema and transactions, and `lib/` contains authentication, errors, and
+rate limiting. `src/index.js` remains the process entry point.
+
+Run `npm run format` to format the server source, tests, and package configuration
+with Prettier, or `npm run format:check` to check formatting without changing files.
 
 ```sh
 cp .env.example .env

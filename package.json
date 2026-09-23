@@ -1,12 +1,23 @@
 {
-  "name": "audio-notifications", "private": true, "version": "1.0.0",
-  "workspaces": ["apps/*"],
+  "name": "audio-notifications",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
+    "format": "prettier --write package.json .prettierrc.json \"apps/server/**/*.js\" apps/server/package.json",
+    "format:check": "prettier --check package.json .prettierrc.json \"apps/server/**/*.js\" apps/server/package.json",
     "test": "npm test --workspace @audio-notifications/server",
     "typecheck": "npm run typecheck --workspace @audio-notifications/mobile",
     "server": "npm start --workspace @audio-notifications/server",
     "android": "npm run android --workspace @audio-notifications/mobile",
     "build:apk": "bash scripts/build-apk.sh"
   },
-  "engines": {"node": ">=22.13.0"}
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "devDependencies": {
+    "prettier": "3.9.9"
+  }
 }
