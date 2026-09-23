@@ -42,7 +42,7 @@ export default function KokoroPicker({ status, refresh }: { status: ListenerStat
       {!loading && !error && catalogue && !catalogue.available && <Text style={s.hint}>{catalogue.enabled ? 'Kokoro is warming up or unavailable. Android speech is ready as your fallback.' : 'Kokoro is not enabled on this server yet. Android speech will be used.'}</Text>}
       <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => { setExpanded(!expanded); if (!expanded) void load(); }} style={s.button}><Text style={s.link}>{expanded ? 'Hide voices ↑' : 'Choose Kokoro voice →'}</Text></Pressable>
       {expanded && <View style={s.choices}>
-        {catalogue?.voices.map(voice => <Pressable key={voice.id} accessibilityRole="radio" accessibilityState={{ checked: status.kokoroVoice === voice.id }} onPress={() => run(() => Listener.setKokoroVoice(voice.id))} style={[s.choice, status.kokoroVoice === voice.id && s.selected]}>
+        {catalogue?.voices.map(voice => <Pressable key={voice.id} accessibilityRole="radio" accessibilityState={{ checked: status.kokoroVoice === voice.id }} onPress={() => run(() => { Listener.setKokoroVoice(voice.id); setExpanded(false); })} style={[s.choice, status.kokoroVoice === voice.id && s.selected]}>
           <Text style={s.name}>{status.kokoroVoice === voice.id ? '✓ ' : ''}{voice.name}</Text><Text style={s.hint}>{voice.description}</Text>
         </Pressable>)}
         <Pressable accessibilityRole="button" disabled={loading} onPress={() => void load()} style={s.button}><Text style={s.link}>Refresh voices</Text></Pressable>

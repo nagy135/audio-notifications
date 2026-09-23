@@ -8,7 +8,7 @@ const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
 const MAX_CACHE_BYTES = 32 * 1024 * 1024;
 const CACHE_TTL_MS = 120_000;
 
-export function createSpeechService({ db, now, url = '', timeoutMs = 15_000 }) {
+export function createSpeechService({ db, now, url = '', timeoutMs = 30_000 }) {
   const cache = new Map();
   const pending = new Map();
   const controllers = new Set();

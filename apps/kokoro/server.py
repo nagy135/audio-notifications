@@ -25,7 +25,7 @@ def load_engine():
     options.intra_op_num_threads = int(os.environ.get("KOKORO_THREADS", "2"))
     options.inter_op_num_threads = 1
     session = ort.InferenceSession(
-        str(directory / "kokoro-v1.0.int8.onnx"), options,
+        str(directory / "kokoro-v1.0.onnx"), options,
         providers=["CPUExecutionProvider"],
     )
     engine = Kokoro.from_session(session, str(directory / "voices-v1.0.bin"))

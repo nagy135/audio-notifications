@@ -15,7 +15,7 @@ export function createServer({
   token,
   now = Date.now,
   kokoroUrl = '',
-  speechTimeoutMs = 15_000,
+  speechTimeoutMs = 30_000,
 } = {}) {
   const authorized = createAuthorization(token);
   const db = openDatabase(database);

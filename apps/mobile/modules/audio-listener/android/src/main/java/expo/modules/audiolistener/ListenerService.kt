@@ -29,7 +29,7 @@ class ListenerService : Service() {
   }
   private val handler = Handler(Looper.getMainLooper())
   private val client = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).connectTimeout(15, TimeUnit.SECONDS).readTimeout(0, TimeUnit.MILLISECONDS).build()
-  private val speechClient = OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS).callTimeout(18, TimeUnit.SECONDS).followRedirects(false).build()
+  private val speechClient = OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS).readTimeout(35, TimeUnit.SECONDS).callTimeout(35, TimeUnit.SECONDS).followRedirects(false).build()
   private var socket: WebSocket? = null
   private var tts: TextToSpeech? = null
   private var ready = false
@@ -198,7 +198,7 @@ class ListenerService : Service() {
     armWatchdog()
     val file = audioFile
     if (file != null) {
-      playbackLabel = "Kokoro · ${m.optString("kokoroVoice", "af_heart")}"
+      playbackLabel = "Kokoro · ${m.optString("kokoroVoice", "af_heart").substringAfter('_').replaceFirstChar { it.uppercase() }}"
       update("Speaking · Kokoro")
       try {
         val media = MediaPlayer()
@@ -234,6 +234,7 @@ class ListenerService : Service() {
 
   private fun fetchKokoro(m: JSONObject) {
     update("Preparing Kokoro voice…")
+    armWatchdog()
     try {
       val prefs = Store.prefs(this)
       val voice = prefs.getString("kokoroVoice", "af_heart")!!
@@ -245,7 +246,7 @@ class ListenerService : Service() {
         .header("Authorization", "Bearer ${Store.token(this)}")
         .post(payload.toString().toRequestBody("application/json".toMediaType())).build()
       val call = speechClient.newCall(request)
-      call.timeout().timeout(remaining.coerceIn(1, 18000), TimeUnit.MILLISECONDS)
+      call.timeout().timeout(remaining.coerceIn(1, 35000), TimeUnit.MILLISECONDS)
       download = call
       call.enqueue(object : Callback {
         override fun onFailure(call: Call, e: IOException) { handler.post {

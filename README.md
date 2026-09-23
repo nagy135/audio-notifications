@@ -4,7 +4,7 @@ An Expo / React Native Android app and a persistent Node.js notification server.
 
 - `apps/mobile`: Expo SDK 55, React Native 0.83, a local Kotlin Expo module.
 - `apps/server`: REST + WebSocket server, SQLite queue and delivery receipts.
-- `apps/kokoro`: private CPU speech worker using the pinned Kokoro v1.0 int8 model and `kokoro-onnx`.
+- `apps/kokoro`: private CPU speech worker using the pinned Kokoro v1.0 float32 model and `kokoro-onnx` (float32 was faster than int8 on nixpi).
 - `skills/audio-notify`: agent skill and Python REST client.
 - `compose.yaml`: private Docker deployment on nixpi.
 
@@ -23,7 +23,7 @@ The listener, WebSocket and Android TextToSpeech engine run in a native foregrou
 
 Android can still stop apps: force-stop, the system's Stop control, reboot, or aggressive manufacturer battery policies require reopening and starting again. Set Tailscale to unrestricted battery use as well if its VPN sleeps. No boot auto-start is installed. Listening consumes more battery than push notifications. Speech follows media volume/output (including Bluetooth); muted media waits until unmuted or expiry. A local offline TTS voice is preferred; install one in Voice settings if needed. Do Not Disturb/device policies may still suppress audio.
 
-Kokoro runs on nixpi without a third-party speech API. The phone always receives the original message text, then requests authenticated WAV audio for that message and its selected voice. Generation is limited to 15 seconds on the server and 18 seconds including transfer on the phone; errors, busy responses, invalid audio or playback errors trigger Android fallback. Audio focus and playback completion still control delivery receipts. **Last playback** shows whether Kokoro or Android was used. Kokoro can work without an installed Android voice, but fallback then requires installing one. A message that expires before playback is not spoken. A failed primary playback can repeat a partially heard phrase through Android.
+Kokoro runs on nixpi without a third-party speech API. The phone always receives the original message text, then requests authenticated WAV audio for that message and its selected voice. Generation is limited to 30 seconds on the server and 35 seconds including transfer on the phone; errors, busy responses, invalid audio or playback errors trigger Android fallback. Audio focus and playback completion still control delivery receipts. **Last playback** shows whether Kokoro or Android was used. Kokoro can work without an installed Android voice, but fallback then requires installing one. A message that expires before playback is not spoken. A failed primary playback can repeat a partially heard phrase through Android.
 
 The initial Kokoro collection supports English. For other languages, turn off Kokoro and choose an appropriate Android voice. Kokoro requires the private server connection; Android fallback works locally for messages already received by the phone. It cannot receive new server messages without a network connection.
 
