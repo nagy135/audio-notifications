@@ -77,3 +77,9 @@ The phone durably remembers its last 200 acknowledgements to avoid replay after 
 Server integration tests cover auth, one-time pairing, separate producer/device permissions, validation, ordered delivery, idempotency conflicts, acknowledgement, reconnect replay, expiry, targeting, revocation, and SQLite persistence. For real phone acceptance, test a REST send while locked, while another app is focused, after a network interruption, and after 15+ minutes idle. Manufacturer-specific battery behavior must be checked on the actual phone.
 
 Implementation references: [Expo local modules](https://docs.expo.dev/modules/get-started/), [Android foreground service types](https://developer.android.com/develop/background-work/services/fgs/service-types), [Android Doze exemptions](https://developer.android.com/training/monitoring-device-state/doze-standby).
+
+### Verified release (2026-09-23)
+
+The signed ARM64/ARMv7 release APK was installed and exercised on an Android 16 (API 36) ARM64 emulator using an offline eSpeak NG engine. Pairing, notification permission, battery exemption, foreground speech, screen-off speech (`mWakefulness=Asleep`), forced Doze (`mState=IDLE`), and recovery of queued messages after loss of all network connectivity passed with actual TTS completion receipts from the native service. The app did not need to be reopened for reconnect delivery. This does not substitute for a long-idle test on the user's physical phone/OEM firmware.
+
+Five server integration tests, TypeScript, ESLint, 20 Expo Doctor checks, release APK signature verification, and the deployed HTTPS/WSS protocol smoke test passed. Release APK SHA-256: `7e7d7e472c071487a2738ed89b83ddf51720422ec2714c3273d0746d67a6c18a`.
