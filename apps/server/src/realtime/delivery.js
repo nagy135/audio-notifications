@@ -1,13 +1,28 @@
 import { WebSocket, WebSocketServer } from 'ws';
+import { randomUUID } from 'node:crypto';
 import { hash } from '../lib/auth.js';
 import { httpError } from '../lib/errors.js';
 
 const DELIVERY_TIMEOUT_MS = 180_000;
 const ACK_STATUSES = new Set(['spoken', 'failed', 'expired']);
 
-export function createDeliveryService({ db, now, rateLimiter }) {
+export function createDeliveryService({ db, now, rateLimiter, logger }) {
   const clients = new Map();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
+  const attempts = new WeakMap();
+
+  function reject(req, socket, status, reason) {
+    logger('ws_rejected', { ...attempts.get(req), status, reason });
+    socket.once('finish', () => socket.destroy());
+    socket.end(
+      `HTTP/1.1 ${status} Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
+    );
+  }
+
+  // ws validates the handshake after our authentication checks.
+  wss.on('wsClientError', (error, socket, req) => {
+    reject(req, socket, req.method === 'GET' ? 400 : 405, error.message);
+  });
 
   function expire() {
     // A message already being spoken gets its bounded delivery window to finish.
@@ -52,7 +67,11 @@ export function createDeliveryService({ db, now, rateLimiter }) {
         expiresAt: message.expires_at,
       }),
     );
-    ws.deliveryTimer = setTimeout(() => ws.terminate(), DELIVERY_TIMEOUT_MS);
+    ws.deliveryTimer = setTimeout(() => {
+      ws.disconnectReason = 'Delivery acknowledgement timed out';
+      logger('ws_timeout', { ...ws.logContext, reason: ws.disconnectReason });
+      ws.terminate();
+    }, DELIVERY_TIMEOUT_MS);
   }
 
   function acknowledge(deviceId, ws, raw) {
@@ -84,15 +103,33 @@ export function createDeliveryService({ db, now, rateLimiter }) {
     }
   }
 
-  function connect(deviceId, ws) {
-    clients.get(deviceId)?.close(4000, 'Replaced by another connection');
+  function connect(deviceId, ws, context) {
+    const previous = clients.get(deviceId);
+    if (previous) {
+      logger('ws_replaced', {
+        ...previous.logContext,
+        replacementConnectionId: context.connectionId,
+      });
+      previous.close(4000, 'Replaced by another connection');
+    }
     clients.set(deviceId, ws);
+    ws.logContext = { ...context, deviceId };
+    const connectedAt = now();
+    logger('ws_connected', ws.logContext);
     ws.alive = true;
     ws.on('pong', () => {
       ws.alive = true;
     });
-    ws.on('error', () => {});
-    ws.on('close', () => {
+    ws.on('error', (error) => {
+      logger('ws_error', { ...ws.logContext, reason: error.message });
+    });
+    ws.on('close', (code, reason) => {
+      logger('ws_disconnected', {
+        ...ws.logContext,
+        code,
+        reason: ws.disconnectReason || reason.toString(),
+        durationMs: Math.max(0, now() - connectedAt),
+      });
       clearTimeout(ws.deliveryTimer);
       if (clients.get(deviceId) === ws) clients.delete(deviceId);
     });
@@ -102,6 +139,17 @@ export function createDeliveryService({ db, now, rateLimiter }) {
   }
 
   function upgrade(req, socket, head) {
+    const context = {
+      connectionId: randomUUID(),
+      remoteAddress: req.socket.remoteAddress,
+      forwardedFor: req.headers['x-forwarded-for']?.slice(0, 200),
+      path: req.url?.split('?')[0].slice(0, 200),
+    };
+    attempts.set(req, context);
+    logger('ws_attempt', context);
+    socket.on('error', (error) => {
+      logger('ws_transport_error', { ...context, reason: error.message });
+    });
     try {
       if (req.url !== '/v1/listen') throw httpError(404, 'Not found');
       rateLimiter.check(`ws:${req.socket.remoteAddress}`, 60);
@@ -110,17 +158,19 @@ export function createDeliveryService({ db, now, rateLimiter }) {
         .prepare('SELECT id FROM devices WHERE token_hash=?')
         .get(hash(bearer));
       if (!device) throw httpError(401, 'Unauthorized');
-      wss.handleUpgrade(req, socket, head, (ws) => connect(device.id, ws));
-    } catch (error) {
-      socket.end(
-        `HTTP/1.1 ${error.status || 400} Rejected\r\nConnection: close\r\n\r\n`,
+      wss.handleUpgrade(req, socket, head, (ws) =>
+        connect(device.id, ws, context),
       );
+    } catch (error) {
+      reject(req, socket, error.status || 400, error.message);
     }
   }
 
   function heartbeat() {
     for (const ws of clients.values()) {
       if (!ws.alive) {
+        ws.disconnectReason = 'Heartbeat pong timed out';
+        logger('ws_timeout', { ...ws.logContext, reason: ws.disconnectReason });
         ws.terminate();
       } else {
         ws.alive = false;
@@ -138,11 +188,18 @@ export function createDeliveryService({ db, now, rateLimiter }) {
   }
 
   function disconnect(deviceId) {
-    clients.get(deviceId)?.close(4001, 'Device revoked');
+    const ws = clients.get(deviceId);
+    if (ws) {
+      logger('ws_revoked', ws.logContext);
+      ws.close(4001, 'Device revoked');
+    }
   }
 
   async function close() {
-    for (const ws of clients.values()) ws.terminate();
+    for (const ws of clients.values()) {
+      ws.disconnectReason = 'Server shutting down';
+      ws.terminate();
+    }
     await new Promise((resolve) => wss.close(resolve));
   }
 

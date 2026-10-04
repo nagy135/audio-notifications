@@ -3,6 +3,7 @@ export type ListenerStatus = {
   paired: boolean; running: boolean; state: string; lastText: string;
   lastAt: number; serverUrl: string; batteryExempt: boolean; speechEngine: string;
   speechBusy: boolean; useKokoro: boolean; kokoroVoice: string; lastVoice: string;
+  connectionError: string; connectionErrorAt: number;
 };
 export type SpeechVoice = { id: string; language: string; label: string; online: boolean };
 export type VoiceCatalogue = {

@@ -43,6 +43,10 @@ export default function App() {
       <View style={s.card}>
         <View style={s.statusRow}><View style={[s.dot, { backgroundColor: connected ? '#b7f36b' : '#8d95a3' }]} /><Text style={s.eyebrow}>{status.running ? 'LISTENER ACTIVE' : 'LISTENER PAUSED'}</Text></View>
         <Text accessibilityLiveRegion="polite" style={s.state}>{status.state}</Text>
+        {!!status.connectionError && <View style={s.connectionIssue}>
+          <Text style={s.issueText}>{status.connectionError}</Text>
+          <Text style={s.hint}>{new Date(status.connectionErrorAt).toLocaleString()}</Text>
+        </View>}
         <Text style={s.hint}>{status.running ? 'You can leave this screen or lock your phone.' : 'Start listening to hear incoming messages aloud.'}</Text>
         <Pressable accessibilityRole="button" disabled={!status.paired || busy} onPress={() => run(status.running ? () => Listener.stop() : start)} style={[s.primary, (!status.paired || busy) && s.disabled, status.running && s.stop]}>
           <Text style={[s.primaryText, status.running && { color: '#f2f4f8' }]}>{status.running ? 'Stop listening' : 'Start listening'}  {status.running ? 'Ⅱ' : '→'}</Text>
@@ -83,6 +87,7 @@ const s = StyleSheet.create({
   top: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, brand: { color: '#c9d2dd', fontSize: 11, fontWeight: '700', letterSpacing: 2 }, tag: { borderWidth: 1, borderColor: '#394338', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 }, tagText: { color: '#b7f36b', fontSize: 9, letterSpacing: 1.5 },
   title: { color: '#f2f4f8', fontSize: 42, lineHeight: 46, fontWeight: '600', letterSpacing: -1.7, marginTop: 12 }, subtitle: { color: '#9ba5b3', fontSize: 16, lineHeight: 25, marginTop: -10 },
   card: { backgroundColor: '#1c242c', borderRadius: 24, padding: 24, borderWidth: 1, borderColor: '#303b45', gap: 16 }, statusRow: { flexDirection: 'row', gap: 8, alignItems: 'center' }, dot: { width: 7, height: 7, borderRadius: 4 }, eyebrow: { color: '#aeb9c6', fontSize: 10, letterSpacing: 2, fontWeight: '700' }, state: { color: '#f2f4f8', fontSize: 27, fontWeight: '500' }, hint: { color: '#9ba5b3', fontSize: 13, lineHeight: 20 },
+  connectionIssue: { borderLeftWidth: 2, borderLeftColor: '#edba79', paddingLeft: 12, gap: 4 }, issueText: { color: '#edba79', fontSize: 13, lineHeight: 20 },
   primary: { backgroundColor: '#b7f36b', padding: 18, borderRadius: 14, alignItems: 'center', marginTop: 5 }, primaryText: { color: '#162211', fontSize: 16, fontWeight: '700' }, stop: { backgroundColor: '#303d48' }, disabled: { opacity: 0.4 }, link: { color: '#b7f36b', fontSize: 14, fontWeight: '600' }, linkButton: { alignItems: 'center', paddingVertical: 10 },
   notice: { borderLeftWidth: 2, borderLeftColor: '#b7f36b', paddingLeft: 16, gap: 8 }, noticeTitle: { color: '#e7ecdF', fontSize: 16, fontWeight: '600' }, section: { gap: 12 }, label: { color: '#c4cdd7', fontSize: 12 }, input: { color: '#f2f4f8', backgroundColor: '#1c242c', borderWidth: 1, borderColor: '#35404b', borderRadius: 12, padding: 14, fontSize: 14 }, secondary: { alignItems: 'center', borderWidth: 1, borderColor: '#596f42', padding: 16, borderRadius: 12 }, last: { color: '#e4e9ef', fontSize: 20, lineHeight: 29 }, footer: { flexDirection: 'row', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: '#2a323c', paddingTop: 20 }, footerLink: { color: '#aab5c2', fontSize: 13, paddingVertical: 8 }, fine: { color: '#697687', fontSize: 11, lineHeight: 17, marginTop: -8 },
 });

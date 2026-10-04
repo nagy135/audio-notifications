@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { createRequestHandler } from './http/handler.js';
 import { createAuthorization } from './lib/auth.js';
+import { logEvent } from './lib/logger.js';
 import { createRateLimiter } from './lib/rate-limit.js';
 import { createDeliveryService } from './realtime/delivery.js';
 import { createDeviceService } from './services/devices.js';
@@ -16,11 +17,13 @@ export function createServer({
   now = Date.now,
   kokoroUrl = '',
   speechTimeoutMs = 30_000,
+  heartbeatIntervalMs = HEARTBEAT_INTERVAL_MS,
+  logger = logEvent,
 } = {}) {
   const authorized = createAuthorization(token);
   const db = openDatabase(database);
   const rateLimiter = createRateLimiter(now);
-  const delivery = createDeliveryService({ db, now, rateLimiter });
+  const delivery = createDeliveryService({ db, now, rateLimiter, logger });
   const devices = createDeviceService({ db, now, delivery });
   const messages = createMessageService({ db, now, delivery });
   const speech = createSpeechService({
@@ -36,6 +39,7 @@ export function createServer({
       devices,
       messages,
       speech,
+      logger,
     }),
   );
   server.on('upgrade', delivery.upgrade);
@@ -45,7 +49,7 @@ export function createServer({
     rateLimiter.prune();
     pruneDatabase(db, now);
     delivery.pumpAll();
-  }, HEARTBEAT_INTERVAL_MS);
+  }, heartbeatIntervalMs);
   heartbeat.unref();
 
   async function close() {

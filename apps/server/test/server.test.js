@@ -10,7 +10,7 @@ import { createServer } from '../src/server.js';
 import { PREVIEW_TEXT } from '../src/services/speech.js';
 const token = 'test-token-with-at-least-32-characters';
 async function setup(t, opts = {}) {
-  const app = createServer({ token, ...opts });
+  const app = createServer({ token, logger: () => {}, ...opts });
   app.server.listen(0, '127.0.0.1');
   await once(app.server, 'listening');
   t.after(() => app.close());
@@ -31,9 +31,10 @@ async function setup(t, opts = {}) {
     const { body } = await api('/v1/pairing', {});
     return (await api('/v1/pair', { code: body.code })).body;
   }
-  function listen(device) {
+  function listen(device, options = {}) {
     const ws = new WebSocket(base.replace('http:', 'ws:') + '/v1/listen', {
       headers: { Authorization: `Bearer ${device.token}` },
+      ...options,
     });
     const queue = [],
       waiting = [];
@@ -295,6 +296,171 @@ test('WebSocket authentication and malformed acknowledgements preserve queued de
   const reconnected = listen(device);
   await reconnected.next();
   assert.equal((await reconnected.next()).id, sent.body.id);
+});
+
+test('connection logs correlate attempts, replacements, revocation and disconnects without credentials', async (t) => {
+  const events = [];
+  const { api, pair, listen } = await setup(t, {
+    logger: (event, details) => events.push({ event, ...details }),
+  });
+  const device = await pair();
+  const first = listen(device);
+  await first.next();
+  const firstClosed = once(first.ws, 'close');
+  const second = listen(device);
+  await second.next();
+  assert.equal((await firstClosed)[0], 4000);
+  assert.equal((await api('/v1/devices')).body.devices[0].connected, true);
+
+  const secondClosed = once(second.ws, 'close');
+  await api('/v1/devices/' + device.deviceId, undefined, {}, 'DELETE');
+  assert.equal((await secondClosed)[0], 4001);
+  const connections = events.filter(({ event }) => event === 'ws_connected');
+  assert.equal(connections.length, 2);
+  for (const connection of connections) {
+    assert.equal(connection.deviceId, device.deviceId);
+    assert(
+      events.some(
+        ({ event, connectionId }) =>
+          event === 'ws_attempt' && connectionId === connection.connectionId,
+      ),
+    );
+    assert(
+      events.some(
+        ({ event, connectionId, code, durationMs }) =>
+          event === 'ws_disconnected' &&
+          connectionId === connection.connectionId &&
+          [4000, 4001].includes(code) &&
+          durationMs >= 0,
+      ),
+    );
+  }
+  assert(
+    events.some(
+      ({ event, replacementConnectionId }) =>
+        event === 'ws_replaced' &&
+        replacementConnectionId === connections[1].connectionId,
+    ),
+  );
+  assert(
+    events.some(
+      ({ event, deviceId }) =>
+        event === 'ws_revoked' && deviceId === device.deviceId,
+    ),
+  );
+  const serialized = JSON.stringify(events);
+  assert(!serialized.includes(device.token));
+  assert(!serialized.includes(token));
+});
+
+test('failed authentication, malformed upgrades, pairing and plain HTTP listener requests are logged', async (t) => {
+  const events = [];
+  const { base, api, pair } = await setup(t, {
+    logger: (event, details) => events.push({ event, ...details }),
+  });
+  async function upgrade(path, bearer, key = 'not-a-valid-key') {
+    return new Promise((resolve, reject) => {
+      const req = http.get(
+        base + path,
+        {
+          headers: {
+            Authorization: `Bearer ${bearer}`,
+            Connection: 'Upgrade',
+            Upgrade: 'websocket',
+            'Sec-WebSocket-Key': key,
+            'Sec-WebSocket-Version': '13',
+          },
+        },
+        (res) => {
+          res.resume();
+          res.on('end', () => resolve(res.statusCode));
+        },
+      );
+      req.on('error', reject);
+    });
+  }
+  assert.equal(await upgrade('/v1/listen', token), 401);
+  const device = await pair();
+  assert.equal(await upgrade('/v1/listen', device.token), 400);
+  assert.equal(await upgrade('/wrong?secret=private-query', device.token), 404);
+  assert.equal((await api('/v1/listen')).status, 426);
+  assert.equal(
+    (await api('/v1/pair', { code: 'private-pairing-code' })).status,
+    401,
+  );
+  assert(
+    events.some(
+      ({ event, status, reason }) =>
+        event === 'ws_rejected' && status === 401 && reason === 'Unauthorized',
+    ),
+  );
+  assert(
+    events.some(
+      ({ event, status, reason }) =>
+        event === 'ws_rejected' &&
+        status === 400 &&
+        /Sec-WebSocket-Key/.test(reason),
+    ),
+  );
+  assert(
+    events.some(
+      ({ event, status }) => event === 'ws_rejected' && status === 404,
+    ),
+  );
+  assert(
+    events.some(
+      ({ event, status }) => event === 'ws_rejected' && status === 426,
+    ),
+  );
+  assert(
+    events.some(
+      ({ event, status }) =>
+        event === 'device_pairing_failed' && status === 401,
+    ),
+  );
+  const serialized = JSON.stringify(events);
+  for (const secret of [
+    token,
+    device.token,
+    'private-query',
+    'private-pairing-code',
+  ])
+    assert(!serialized.includes(secret));
+});
+
+test('heartbeat failures log the device and timeout reason before disconnecting', async (t) => {
+  const events = [];
+  const disconnected = Promise.withResolvers();
+  const { pair, listen } = await setup(t, {
+    heartbeatIntervalMs: 50,
+    logger: (event, details) => {
+      events.push({ event, ...details });
+      if (event === 'ws_disconnected') disconnected.resolve();
+    },
+  });
+  const device = await pair();
+  const client = listen(device, { autoPong: false });
+  await client.next();
+  const closed = once(client.ws, 'close');
+  assert.equal((await closed)[0], 1006);
+  await disconnected.promise;
+  assert(
+    events.some(
+      ({ event, deviceId, reason }) =>
+        event === 'ws_timeout' &&
+        deviceId === device.deviceId &&
+        reason === 'Heartbeat pong timed out',
+    ),
+  );
+  assert(
+    events.some(
+      ({ event, deviceId, reason, code }) =>
+        event === 'ws_disconnected' &&
+        deviceId === device.deviceId &&
+        code === 1006 &&
+        reason === 'Heartbeat pong timed out',
+    ),
+  );
 });
 
 // A minimal PCM WAV keeps transport tests independent of model downloads.

@@ -7,6 +7,7 @@ export function createRequestHandler({
   devices,
   messages,
   speech,
+  logger,
 }) {
   return async (req, res) => {
     const reply = (status, value) => replyJson(res, status, value);
@@ -19,7 +20,21 @@ export function createRequestHandler({
       rateLimiter.check(req.socket.remoteAddress, 180);
       if (req.method === 'POST' && path === '/v1/pair') {
         rateLimiter.check(`pair:${req.socket.remoteAddress}`, 10);
-        return reply(201, devices.pair(await readJson(req)));
+        const device = devices.pair(await readJson(req));
+        logger('device_paired', {
+          deviceId: device.deviceId,
+          remoteAddress: req.socket.remoteAddress,
+        });
+        return reply(201, device);
+      }
+
+      if (path === '/v1/listen') {
+        logger('ws_rejected', {
+          remoteAddress: req.socket.remoteAddress,
+          status: 426,
+          reason: 'WebSocket upgrade required',
+        });
+        return reply(426, { error: 'WebSocket upgrade required' });
       }
 
       if (req.method === 'GET' && path === '/v1/voices') {
@@ -62,6 +77,13 @@ export function createRequestHandler({
       }
       throw httpError(404, 'Not found');
     } catch (error) {
+      if (req.method === 'POST' && req.url?.split('?')[0] === '/v1/pair') {
+        logger('device_pairing_failed', {
+          remoteAddress: req.socket.remoteAddress,
+          status: error.status || 500,
+          reason: error.status ? error.message : 'Internal server error',
+        });
+      }
       if (!error.status) console.error(error);
       reply(error.status || 500, {
         error: error.status ? error.message : 'Internal server error',

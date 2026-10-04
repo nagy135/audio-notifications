@@ -57,6 +57,7 @@ class AudioListenerModule : Module() {
         "speechBusy" to ListenerService.speechBusy, "useKokoro" to p.getBoolean("useKokoro", true),
         "kokoroVoice" to p.getString("kokoroVoice", "af_heart"), "lastVoice" to p.getString("lastVoice", ""),
         "state" to ListenerService.state, "speechEngine" to ListenerService.speechEngine, "lastText" to p.getString("lastText", ""),
+        "connectionError" to p.getString("connectionError", ""), "connectionErrorAt" to p.getLong("connectionErrorAt", 0).toDouble(),
         "lastAt" to p.getLong("lastAt", 0).toDouble(), "serverUrl" to p.getString("url", "https://nixpi.tail6650cb.ts.net:8444"),
         "batteryExempt" to context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName))
     }

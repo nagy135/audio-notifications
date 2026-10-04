@@ -10,12 +10,17 @@ import android.media.MediaPlayer
 import android.os.*
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.util.Log
 import okhttp3.*
 import org.json.JSONObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.io.IOException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import javax.net.ssl.SSLException
 import java.util.concurrent.TimeUnit
 
 class ListenerService : Service() {
@@ -26,9 +31,12 @@ class ListenerService : Service() {
     @Volatile var speechBusy = false
     private const val CHANNEL = "audio-listener"
     private const val NOTICE = 7001
+    private const val TAG = "AudioListener"
+    private const val HANDSHAKE_TIMEOUT_MS = 30000L
   }
   private val handler = Handler(Looper.getMainLooper())
-  private val client = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).connectTimeout(15, TimeUnit.SECONDS).readTimeout(0, TimeUnit.MILLISECONDS).build()
+  // OkHttp clears the read timeout after upgrading to WebSocket. Keep the HTTP/TLS handshake bounded.
+  private val client = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS).connectTimeout(15, TimeUnit.SECONDS).readTimeout(15, TimeUnit.SECONDS).followRedirects(false).build()
   private val speechClient = OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS).readTimeout(35, TimeUnit.SECONDS).callTimeout(35, TimeUnit.SECONDS).followRedirects(false).build()
   private var socket: WebSocket? = null
   private var tts: TextToSpeech? = null
@@ -46,6 +54,9 @@ class ListenerService : Service() {
   private var playbackDeadline = 0L
   private var destroyed = false
   private var retry = 1000L
+  private var connectionAttempt = 0
+  private var connectionStartedAt = 0L
+  private var connected = false
   private var active: JSONObject? = null
     set(value) { field = value; speechBusy = value != null }
   private var wakeLock: PowerManager.WakeLock? = null
@@ -54,6 +65,14 @@ class ListenerService : Service() {
   private val audio by lazy { getSystemService(AudioManager::class.java) }
   private val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
   private val reconnect = Runnable { connect() }
+  private val connectionWatchdog = Runnable {
+    if (!destroyed && !connected) {
+      val pending = socket
+      socket = null; pending?.cancel()
+      recordConnectionError("Connection timed out after 30 seconds. Check Tailscale and the server address.")
+      scheduleReconnect()
+    }
+  }
   private val speakLater = Runnable { speak() }
   private val watchdog = Runnable { finish("failed", "Speech timed out") }
   private val renewWake = object : Runnable {
@@ -117,14 +136,25 @@ class ListenerService : Service() {
   private fun connect() {
     if (destroyed || !ready) return
     handler.removeCallbacks(reconnect)
+    handler.removeCallbacks(connectionWatchdog)
     socket?.cancel(); socket = null
+    connected = false
+    connectionAttempt++; connectionStartedAt = SystemClock.elapsedRealtime()
     try {
       val p = Store.prefs(this)
       val url = p.getString("url", "")!!.replaceFirst("https://", "wss://") + "/v1/listen"
       update("Connecting…")
       val request = Request.Builder().url(url).header("Authorization", "Bearer ${Store.token(this)}").build()
+      Log.i(TAG, "Connecting attempt=$connectionAttempt server=${request.url.host}:${request.url.port} deviceId=${p.getString("deviceId", "")}")
       socket = client.newWebSocket(request, object : WebSocketListener() {
-        override fun onOpen(ws: WebSocket, response: Response) { handler.post { if (socket === ws && !destroyed) { retry = 1000L; if (active == null) update("Listening") } } }
+        override fun onOpen(ws: WebSocket, response: Response) { handler.post {
+          if (socket !== ws || destroyed) return@post
+          handler.removeCallbacks(connectionWatchdog)
+          connected = true; retry = 1000L
+          Store.prefs(this@ListenerService).edit().remove("connectionError").remove("connectionErrorAt").apply()
+          Log.i(TAG, "Connected attempt=$connectionAttempt elapsedMs=${SystemClock.elapsedRealtime() - connectionStartedAt}")
+          if (active == null) update("Listening")
+        } }
         override fun onMessage(ws: WebSocket, text: String) { handler.post {
           if (socket !== ws || destroyed) return@post
           try {
@@ -140,23 +170,49 @@ class ListenerService : Service() {
         } }
         override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) { handler.post {
           if (socket !== ws || destroyed) return@post
-          socket = null
+          handler.removeCallbacks(connectionWatchdog)
+          socket = null; connected = false
+          recordConnectionError(connectionFailure(t, response), t)
           if (response?.code == 401) { update("Pairing expired or revoked. Pair again."); return@post }
+          if (response?.code == 429) retry = 60000L
           scheduleReconnect()
         } }
         override fun onClosing(ws: WebSocket, code: Int, reason: String) { ws.close(code, reason) }
         override fun onClosed(ws: WebSocket, code: Int, reason: String) { handler.post {
           if (socket !== ws || destroyed) return@post
-          socket = null
+          handler.removeCallbacks(connectionWatchdog)
+          socket = null; connected = false
+          recordConnectionError("Server closed the connection (code $code): ${reason.take(200)}")
           if (code == 4000 || code == 4001) { update("Device disconnected. Pair again."); return@post }
           scheduleReconnect()
         } }
       })
-    } catch (_: Exception) { scheduleReconnect() }
+      handler.postDelayed(connectionWatchdog, HANDSHAKE_TIMEOUT_MS)
+    } catch (error: Exception) {
+      recordConnectionError(connectionFailure(error, null), error)
+      scheduleReconnect()
+    }
+  }
+  private fun connectionFailure(error: Throwable, response: Response?): String = when {
+    response?.code == 401 -> "Server rejected this device's pairing (HTTP 401). Pair again."
+    response?.code == 429 -> "Server rate limit reached (HTTP 429). Waiting one minute before retrying."
+    response != null -> "Server rejected the connection (HTTP ${response.code}). Check the server address and server logs."
+    error is UnknownHostException -> "Cannot resolve the server name. Check Tailscale DNS and Android Private DNS."
+    error is SSLException -> "Secure connection failed. Check the phone's date/time and server certificate."
+    error is SocketTimeoutException -> "Connection timed out. Check Tailscale and the server address."
+    error is ConnectException -> "Cannot reach the server. Check Tailscale and the server address."
+    else -> "${error.javaClass.simpleName}: ${error.message?.take(200) ?: "Connection failed"}"
+  }
+  private fun recordConnectionError(reason: String, error: Throwable? = null) {
+    Store.prefs(this).edit().putString("connectionError", reason).putLong("connectionErrorAt", System.currentTimeMillis()).apply()
+    Log.w(TAG, "Connection failed attempt=$connectionAttempt elapsedMs=${SystemClock.elapsedRealtime() - connectionStartedAt}: $reason", error)
   }
   private fun scheduleReconnect() {
-    if (active == null) update("Reconnecting — check Tailscale")
-    handler.removeCallbacks(reconnect); handler.postDelayed(reconnect, retry + (0..500).random())
+    if (destroyed) return
+    if (active == null) update("Reconnecting in ${retry / 1000} seconds…")
+    val delay = retry + (0..500).random()
+    Log.i(TAG, "Retrying connection in ${delay}ms")
+    handler.removeCallbacks(reconnect); handler.postDelayed(reconnect, delay)
     retry = (retry * 2).coerceAtMost(30000L)
   }
   private fun speak() {
@@ -323,10 +379,12 @@ class ListenerService : Service() {
       p.edit().putString("receipts", receipts.toString()).commit()
       socket?.send(ack.toString())
     }
-    update(if (status == "failed") "Speech failed — open voice settings" else if (socket == null) "Reconnecting — check Tailscale" else "Listening")
+    update(if (status == "failed") "Speech failed — open voice settings" else if (!connected) "Waiting for server connection…" else "Listening")
   }
   override fun onDestroy() {
     destroyed = true; running = false; state = "Stopped"; speechEngine = ""
+    connected = false
+    Log.i(TAG, "Listener stopped")
     active = null
     handler.removeCallbacksAndMessages(null)
     download?.cancel(); download = null

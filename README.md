@@ -73,6 +73,35 @@ sudo tailscale serve --bg --https=8444 http://127.0.0.1:8787
 
 Deployed checkout: `infiniter@nixpi.tail6650cb.ts.net:~/services/audio-notifications`. Docker binds localhost only; Tailscale Serve provides HTTPS/WSS privately on port 8444. It coexists with the existing service on 8443. SQLite lives in the `audio-data` Docker volume; preserve this volume on upgrades. The container restarts unless stopped and has a health check. Use `docker compose logs --tail=100 server` and `docker compose ps` for diagnostics. Back up SQLite using its online backup API or stop the container before copying the database and WAL files.
 
+Connection events are logged as JSON with timestamps: `ws_attempt`, `ws_connected`,
+`ws_rejected`, `ws_disconnected`, `ws_error`, `ws_transport_error`, `ws_timeout`,
+`ws_replaced`, and `ws_revoked`. A connection ID ties an attempt to its lifecycle;
+authenticated events include the device ID. Rejections include the HTTP status and
+reason; disconnects include the close code, reason and duration. Pairing successes
+and failures are logged too. Tokens, pairing codes, message text and URL queries
+are excluded. Follow these logs with `docker compose logs -f --tail=100 server`.
+
+If the phone cycles between Connecting and Reconnecting, open
+`https://nixpi.tail6650cb.ts.net:8444/health` in its browser. It should return
+`{"ok":true}`. If it cannot load, check the phone's Tailscale VPN, excluded apps,
+Android Private DNS and any competing VPN, then reconnect Tailscale. DNS, routing
+and TLS failures happen before reaching Node and cannot appear in the server's
+connection logs; inspect Tailscale's logs with `journalctl -u tailscaled` as well.
+If the phone appears connected and responds to pings but names still time out,
+force-stop Tailscale in Android app settings, reopen it and reconnect; an
+[upstream Android DNS stall report](https://github.com/tailscale/tailscale/issues/21155)
+describes recovery requiring a process restart rather than a VPN toggle.
+The Android listener keeps the last connection error and timestamp visible across
+retries and app restarts, clearing it after a successful connection. Each handshake
+is limited to 30 seconds. With an attached phone, native diagnostics are available
+using `adb logcat -s AudioListener` (attempts, failures and retry delays).
+
+The signed Android 1.1.1 release includes these diagnostics (version code 3).
+Validation passed 15 server integration tests, TypeScript, ESLint, macOS integration
+checks, native release compilation and APK signature verification. Physical phone
+connection recovery still needs checking. APK SHA-256:
+`13226a4c711d45c5357a9ec5bd4a3be75180b7e16e38a68a216c4ce7cccdfbbb`.
+
 The producer/admin bearer token is in the deployment's `.env`. Agent config on each authorized host is `~/.config/audio-notifications/client.json` with mode 600:
 
 ```json
