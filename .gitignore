@@ -15,3 +15,4 @@ data/
 **/android/.gradle/
 **/android/.cxx/
 __pycache__/
+apps/macos/build/

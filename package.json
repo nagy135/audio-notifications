@@ -12,7 +12,9 @@
     "typecheck": "npm run typecheck --workspace @audio-notifications/mobile",
     "server": "npm start --workspace @audio-notifications/server",
     "android": "npm run android --workspace @audio-notifications/mobile",
-    "build:apk": "bash scripts/build-apk.sh"
+    "build:apk": "bash scripts/build-apk.sh",
+    "build:macos": "bash apps/macos/scripts/build.sh",
+    "test:macos": "bash apps/macos/scripts/test.sh"
   },
   "engines": {
     "node": ">=22.13.0"

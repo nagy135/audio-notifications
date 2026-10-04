@@ -1,8 +1,9 @@
 # Audio Notifications
 
-An Expo / React Native Android app and a persistent Node.js notification server. Agents POST text; the phone reads it aloud with Kokoro neural speech, including while the screen is locked. The selected Android speech voice is used automatically when Kokoro cannot generate or play audio.
+Native macOS and Expo / React Native Android listeners with a persistent Node.js notification server. Agents POST text; paired devices read it aloud with Kokoro neural speech. The phone listens while its screen is locked. Each listener uses system speech when Kokoro cannot generate or play audio.
 
 - `apps/mobile`: Expo SDK 55, React Native 0.83, a local Kotlin Expo module.
+- `apps/macos`: native Swift app with a standard macOS window, automatic WebSocket listening on launch, Kokoro playback, and macOS speech fallback.
 - `apps/server`: REST + WebSocket server, SQLite queue and delivery receipts.
 - `apps/kokoro`: private CPU speech worker using the pinned Kokoro v1.0 float32 model and `kokoro-onnx` (float32 was faster than int8 on nixpi).
 - `skills/audio-notify`: agent skill and Python REST client.
@@ -28,6 +29,14 @@ Kokoro runs on nixpi without a third-party speech API. The phone always receives
 The initial Kokoro collection supports English. For other languages, turn off Kokoro and choose an appropriate Android voice. Kokoro requires the private server connection; Android fallback works locally for messages already received by the phone. It cannot receive new server messages without a network connection.
 
 ## Develop and build locally
+
+For the Mac app, run `npm run build:macos`, then open
+`apps/macos/build/Audio Notifications.app`. Enter a one-use pairing code on first
+launch, or use `python3 apps/macos/scripts/pair.py` with the existing local producer
+config before opening it. Future launches listen automatically. See
+[the macOS README](apps/macos/README.md) for controls, installation, and
+`npm run test:macos`. The Mac and phone have separate device credentials; broadcasts
+reach both, while `deviceId` selects one.
 
 Node 22.13+ (Node 24 LTS recommended), npm, JDK 17, Android SDK 36 and build-tools 36.0.0.
 
